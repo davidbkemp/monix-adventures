@@ -7,6 +7,7 @@ import monix.reactive.{Observable, OverflowStrategy}
 
 import scala.util.{Failure, Success, Try}
 import scala.concurrent.duration._
+import cats.implicits._
 
 /**
   * If elements from a list can be operated on synchronously as a List[A], then the equivalent data structure where
@@ -102,26 +103,20 @@ object ObservableAdventures {
     * The first page of data can be obtained using PageId.FirstPage`, after which you should follow the nextPage
     * references in the PaginatedResult.
     *
-    * Look at
-    * Observable.++ AND
-    * Observable.tailRecM OR Observable.flatMap
+    * Look at Observable.unfoldEval
     */
   def readFromPaginatedDatasource(readPage: PageId => Task[PaginatedResult]): Observable[SourceRecord] = {
-    def scanPages(pageId: PageId): Observable[Either[PageId, SourceRecord]] = {
-      Observable.fromTask(readPage(pageId)).flatMap { paginatedResult =>
-        Observable.fromIterable(paginatedResult.results).map(Right(_)) ++
-          continue(paginatedResult.nextPage)
-      }
-    }
 
-    def continue(maybeNextPage: Option[PageId]): Observable[Either[PageId, SourceRecord]] = {
-      maybeNextPage match {
-        case Some(pageId) => Observable(Left(pageId))
-        case None => Observable.empty
-      }
-    }
+    def unfoldPage(
+      maybePageId: Option[PageId]
+    ): Task[Option[(List[SourceRecord], Option[PageId])]] =
+      maybePageId.traverse(readPage(_).map { page =>
+        (page.results, page.nextPage)
+      })
 
-    Observable.tailRecM(PageId.FirstPage)(scanPages)
+    Observable
+      .unfoldEval(PageId.FirstPage.some)(unfoldPage)
+      .flatMap(Observable.fromIterable(_))
   }
 
   /**
